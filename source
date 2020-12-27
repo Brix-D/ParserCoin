@@ -1,0 +1,124 @@
+from bs4 import BeautifulSoup
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError
+from urllib.parse import quote
+import csv
+import time
+
+
+class Parser:
+    """
+    Класс парсер отвечает за получение web-страниц по HTTP, поиск всех ссылок на нужные web-страницы,
+    и за экранирование ссылок в Piny-code формат (экранирование всех символов в допустимый URL)
+    """
+
+    def __init__(self, init_page, domain):
+        self.httpref = "https://coinmarketcap.com/"  # стартовая страница для парсера
+        self.useragent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.83 Safari/537.36"
+        # юзерагент, прикрепляемый к каждому запросу web-страницы, чтобы попытаться выдать скрипт за веб-браузер
+        self.links = list()
+        self.BS = ''  # пустой обьект BeautifulSoup
+        self.init_page = init_page
+        self.domain = domain  # корневой домен сайта, для подстановки во все относительные ссылки сайта
+
+    def run(self):
+        """
+        запуск работы парсера
+        """
+
+        self.get_web_page(self.init_page)  # получение стартовой веб-страницы
+        self.get_all_links()  # получение всех ссылок на криптовалюты на ней
+        self.quote_links()  # экранирование всех ссылок в допустимый для браузера формат (могут быть кириллические,
+        # и содержащие не допустимые символы)
+
+        """Запись в файл csv, utf-8 кодировка в excel не читается 0_о"""
+        with open("crypto.csv", "w", newline='', encoding="utf-8") as f:
+            writer = csv.writer(f, delimiter=";")
+            writer.writerow(["Сайт криптовалюты", "Плата", "ссылка 1", "ссылка 2"])
+
+            for link in self.links:
+                self.get_web_page(link)
+                item = Item(self.BS)  # каждый спарсенный URL-представляется в виде BeautifulSoup-объекта
+                # site = item.get_site()
+                # fees = item.get_fees()
+                # if len(item.ul) > 3:
+                #     tg = item.get_blog()
+                # else:
+                #     tg = ""
+                # tw = item.get_twitter()
+                attr = item.get_links_item()  # получение всех атрибутов-ссылок текущей криптовалюты
+                writer.writerow(attr)
+
+    def get_web_page(self, url):
+        req = Request(url)
+        req.add_header("Referer", self.httpref)
+        req.add_header("User-agent", self.useragent)
+        """
+        Костыль и велосипед - сайт при слишком частом обращение к нему выдает таймаут,
+        время которого находится в заголовке ответа Retry-After, скрипт просто усыпляется на это время,
+        баг - в том что таймаут не всегда дается на одинаковое количество секунд,
+        и скрипт может спать больше нужного времени
+        """
+
+        while True:
+            try:
+                raw_html = urlopen(req).read().decode("utf-8", "ignore")
+                break
+            except HTTPError as err:
+                sleeptime = err.headers["Retry-After"]
+                print(f"Слишком много запросов к серверу сайта, скрипт приостановлен на {sleeptime} секунд")
+                time.sleep(int(sleeptime) + 1)
+                print("Скрипт возобновлен")
+
+        self.BS = BeautifulSoup(raw_html, features="html.parser")
+
+    def get_all_links(self):
+        """
+        Ищет все ссылки с нужным классом на начальной странице
+        """
+
+        divs = self.BS.find_all('div', class_="hOWBfa")
+        links = list()
+        for div in divs:
+            links.append(div.find('a', "cmc-link", href=True)['href'])
+        for link in links:
+            link = self.domain + link
+            self.links.append(link)
+
+    def quote_links(self):
+        """Экранирует все символы не URL формата в ссылке, кроме https://"""
+        l = self.links.copy()
+        self.links.clear()
+        for link in l:
+            qlink = quote(link, safe=":/")
+            self.links.append(qlink)
+
+
+class Item:
+    """Отвечает за страницу конкретной криптовалюты, получает все ее атрибуты, ссылки на ее ресурсы в сети"""
+    def __init__(self, BS):
+        self.BS = BS
+        self.ul = self.BS.find('ul', class_="cmc-details-panel-links").find_all('li')[:-2]
+
+    # def get_site(self):
+    #     return self.ul[0].find('a', href=True)['href']
+    #
+    # def get_fees(self):
+    #     return self.ul[1].find('a', href=True)['href']
+    #
+    # def get_blog(self):
+    #     return self.ul[-2].find('a', href=True)['href']
+    #
+    # def get_twitter(self):
+    #     return self.ul[-1].find('a', href=True)['href']
+
+    def get_links_item(self):
+        links = list()
+        for l in self.ul:
+            links.append(l.find('a', href=True)['href'])
+        return links
+
+
+"""Запуск парсера на работу"""
+p = Parser("https://coinmarketcap.com/rankings/exchanges", "https://coinmarketcap.com")
+p.run()
